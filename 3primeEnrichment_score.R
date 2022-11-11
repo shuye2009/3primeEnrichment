@@ -34,12 +34,13 @@ threePrimeEnrichmentScore <- function(treatBam, controlBam, gtfFile, stranded=FA
       scores <- NULL
       print(system.time({
          cl <- start_parallel(nc)
-         registerDoParallel(cl)
+         #registerDoParallel(cl)
          print("exporting global environment variables")
          clusterExport(cl, c("seqnames", "runValue", "expand_gene", "calculate_score", "AUC"), envir=.GlobalEnv)
          print("exporting local environment variables")
          clusterExport(cl, c("gene_gr", "tx_lens", "sample_cvg", "control_cvg"), envir=environment())
          print("variables exported")
+         if(0){
          scores <- foreach(i=1:length(gene_gr), .combine="rbind") %dopar% {
             library(GenomicRanges)
             asample_cvg <- sample_cvg[[seqnames(gene_gr[i])]]
@@ -47,8 +48,19 @@ threePrimeEnrichmentScore <- function(treatBam, controlBam, gtfFile, stranded=FA
             len <- tx_lens[names(gene_gr[i])]
             score <- calculate_score(gene_gr[i], len, asample_cvg, acontrol_cvg, plt=FALSE)
             score
-         } 
+         }
+         }
+         scores <- parLapply(cl, seq_along(gene_gr), function(i){
+            x <- gene_gr[i]
+            asample_cvg <- sample_cvg[[seqnames(x)]]
+            acontrol_cvg <- control_cvg[[seqnames(x)]]
+            len <- tx_lens[names(x)]
+            score <- calculate_score(x, len, asample_cvg, acontrol_cvg, plt=FALSE)
+            score
+            
+         })
          stop_parallel(cl)
+         scores <- bind_rows(scores)
       }))
       
       df <- data.frame(Name=names(gene_gr), Length=width(gene_gr))

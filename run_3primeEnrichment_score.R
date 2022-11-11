@@ -11,13 +11,13 @@ if(!file.exists(gtfFile)) gtfFile <- R.utils::gunzip(gz, remove=FALSE)
 
 if(1){
 args <- commandArgs(trailingOnly = T)
-wd <- args[1] # "C:/GREENBLATT/Zuyao/RNAseq/Nonstranded"
+wd <- args[1]
 setwd(wd)
 
-treatBam <- args[2] # "C:/GREENBLATT/Zuyao/RNAseq/Nonstranded/Greenblatt_1_DKO_2_ATCACG/Aligned.sortedByCoord.out.bam"
-names(treatBam) <- args[3] # "DKO_2"
-controlBam <- args[4] # "C:/GREENBLATT/Zuyao/RNAseq/Nonstranded/Greenblatt_10_Scramble_Cri_2_GAGTGG/Aligned.sortedByCoord.out.bam"
-names(controlBam) <- args[5] #"Scramble_2"
+treatBam <- args[2] 
+names(treatBam) <- args[3]
+controlBam <- args[4] 
+names(controlBam) <- args[5] 
 genome <- args[6]
 nc <- as.integer(args[7])
 stranded <- as.logical(args[8])
@@ -36,6 +36,8 @@ if(0){
    nc <- 20
    stranded <- FALSE
 }
+
+
 handleInputParams <- list(CLIP_reads=FALSE, fix_width=0, fix_point="start", norm=FALSE, useScore=FALSE,
                           outRle=FALSE, useSizeFactor=FALSE, genome=genome)
 
