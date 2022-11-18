@@ -8,8 +8,7 @@ library(GenomeInfoDb)
 library(fields)
 library(dplyr)
 
-threePrimeEnrichmentScore <- function(treatBam, controlBam, gtfFile, stranded=FALSE, handleInputParams=NULL, nc=20){
-   txdb <- makeTxDbFromGFF(gtfFile)
+threePrimeEnrichmentScore <- function(treatBam, controlBam, txdb, stranded=FALSE, handleInputParams=NULL, nc=20){
    
    print("obtaining gene coordinates")
    gene <- get_genomic_feature_coordinates(txdb, featureName="gene", longest=TRUE, protein_coding=TRUE)
@@ -34,38 +33,28 @@ threePrimeEnrichmentScore <- function(treatBam, controlBam, gtfFile, stranded=FA
       scores <- NULL
       print(system.time({
          cl <- start_parallel(nc)
-         #registerDoParallel(cl)
+         registerDoParallel(cl)
          print("exporting global environment variables")
          clusterExport(cl, c("seqnames", "runValue", "expand_gene", "calculate_score", "AUC"), envir=.GlobalEnv)
          print("exporting local environment variables")
          clusterExport(cl, c("gene_gr", "tx_lens", "sample_cvg", "control_cvg"), envir=environment())
          print("variables exported")
-         if(0){
+         
          scores <- foreach(i=1:length(gene_gr), .combine="rbind") %dopar% {
             library(GenomicRanges)
             asample_cvg <- sample_cvg[[seqnames(gene_gr[i])]]
             acontrol_cvg <- control_cvg[[seqnames(gene_gr[i])]]
             len <- tx_lens[names(gene_gr[i])]
-            score <- calculate_score(gene_gr[i], len, asample_cvg, acontrol_cvg, plt=FALSE)
+            score <- calculate_score(gene_gr[i], len, asample_cvg, acontrol_cvg, plt=FALSE, countPerBase=1)
             score
          }
-         }
-         scores <- parLapply(cl, seq_along(gene_gr), function(i){
-            x <- gene_gr[i]
-            asample_cvg <- sample_cvg[[seqnames(x)]]
-            acontrol_cvg <- control_cvg[[seqnames(x)]]
-            len <- tx_lens[names(x)]
-            score <- calculate_score(x, len, asample_cvg, acontrol_cvg, plt=FALSE)
-            score
-            
-         })
+         
          stop_parallel(cl)
-         scores <- bind_rows(scores)
       }))
       
       df <- data.frame(Name=names(gene_gr), Length=width(gene_gr))
       df <- cbind(df, scores)
-      colnames(df) <- c("Name", "length", "Tx_length", "Score", "Count", "Count_ctr", "Depth")
+      colnames(df) <- c("Name", "Length", "Tx_length", "Score", "Count", "Count_ctr", "Depth")
       
    }else{
       sample_grl <- split(inputs[[1]]$query, strand(inputs[[1]]$query))
@@ -109,7 +98,7 @@ threePrimeEnrichmentScore <- function(treatBam, controlBam, gtfFile, stranded=FA
       }))
       df <- data.frame(Name=names(gene_gr), Length=width(gene_gr))
       df <- cbind(df, scores)
-      colnames(df) <- c("Name", "length", "Tx_length", "Score", "Count", "Count_ctr", "Depth", "Antisense_tx_length", "Antisense_score", "Antisense_Count", "Antisense_count_ctr", "Antisense_depth")
+      colnames(df) <- c("Name", "Length", "Tx_length", "Score", "Count", "Count_ctr", "Depth", "Antisense_tx_length", "Antisense_score", "Antisense_Count", "Antisense_count_ctr", "Antisense_depth")
       
    }
    write.table(df, paste0(dataName, "_3prime_enrichment_score.tab"), sep="\t", row.names=FALSE, quote=FALSE)
@@ -139,7 +128,7 @@ expand_gene <- function(gr){
    return(grx)
 }
 
-calculate_score <- function(agene_gr, len, asample_cvg, acontrol_cvg, plt=FALSE, countPerBase=2){
+calculate_score <- function(agene_gr, len, asample_cvg, acontrol_cvg, plt=FALSE, countPerBase=1){
    grx <- expand_gene(agene_gr)
    names(len) <- NULL
   
@@ -149,7 +138,7 @@ calculate_score <- function(agene_gr, len, asample_cvg, acontrol_cvg, plt=FALSE,
    ctr_counts <- viewSums(control_v)
       
    enrichment_score <- 0
-   depth <- max(ctr_counts)/len
+   depth <- min(max(ctr_counts), max(counts))/len
    if(depth > countPerBase){
       
       suppressWarnings(auc <- AUC(ctr_counts, counts, method="trapezoid"))
@@ -170,14 +159,15 @@ plot_3prime_enrichment <- function(datafm=NULL, dataFiles=NULL, n_bins=20, dataN
    if(!is.null(dataFiles)){
       print(dataFiles)
       datafm <- lapply(dataFiles, read.delim, header=TRUE)
-      datafm <- data.frame(bind_rows(datafm))
+      datafm <- bind_rows(datafm)
    }
-   datafm <- datafm %>%
+   datafmS <- datafm %>%
       filter(!is.na(Score)) %>%
-      filter(Score > 0)
-   data_sorted <- datafm[order(datafm[,2]),]
+      filter(Depth > 1) %>%
+      filter(Length > 1000)
+   data_sorted <- datafmS[order(datafmS[,2]),]
    head(data_sorted)
-   size <- dim(data_sorted)[1]
+   size <- nrow(data_sorted)
    step = ceiling(size/(n_bins+1))
    bin <- seq(1, size, step)
    breaks <- data_sorted[bin,2]
@@ -192,20 +182,21 @@ plot_3prime_enrichment <- function(datafm=NULL, dataFiles=NULL, n_bins=20, dataN
    mean_score <- mean_score[1:length(mean_score)]
    lines(breaks, mean_score, type="b", col="red")
    abline(h=1, col="cyan")
-   r<-cor(breaks, mean_score)
+   r <-  cor(data_sorted[,4], log(data_sorted[,2])) #cor(log(breaks), mean_score)
    rsq <- r*r
-   r_2 = sprintf("%.3f", rsq)
+   r_2 <- sprintf("%.3f", r)
    usr <- par( "usr" )
-   mtext(paste("R-squared = ",r_2, sep=""), side=3, col="blue" )
+   mtext(paste("r = ",r_2, sep=""), side=3, col="blue" )
    
    if(stranded){
-      datafm <- datafm %>%
+      datafmAS <- datafm %>%
          filter(!is.na(Antisense_score)) %>%
-         filter(Antisense_score > 0)
-      data_sorted <- datafm[order(datafm[,2]),]
+         filter(Antisense_depth > 1) %>%
+         filter(Length > 1000)
+      data_sorted <- datafmAS[order(datafmAS[,2]),]
       head(data_sorted)
-      size <- dim(data_sorted)[1]
-      step = ceiling(size/(n_bins+1))
+      size <- nrow(data_sorted)
+      step <- ceiling(size/(n_bins+1))
       bin <- seq(1, size, step)
       breaks <- data_sorted[bin,2]
       length(breaks)
@@ -217,11 +208,11 @@ plot_3prime_enrichment <- function(datafm=NULL, dataFiles=NULL, n_bins=20, dataN
       mean_score <- mean_score[1:length(mean_score)]
       lines(breaks, mean_score, type="b", col="red")
       abline(h=1, col="cyan")
-      r<-cor(breaks, mean_score)
+      r <-  cor(data_sorted[,9], log(data_sorted[,2])) #cor(log(breaks), mean_score)
       rsq <- r*r
-      r_2 = sprintf("%.3f", rsq)
+      r_2 <- sprintf("%.3f", r)
       usr <- par( "usr" )
-      mtext(paste("R-squared = ",r_2, sep=""), side=3, col="blue" )
+      mtext(paste("r = ",r_2, sep=""), side=3, col="blue" )
    }
    dev.off()
 }
